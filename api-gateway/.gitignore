@@ -27,3 +27,9 @@
 
 # Системные файлы
 Thumbs.db
+
+build/
+**/build/
+CMakeCache.txt
+CMakeFiles/
+
