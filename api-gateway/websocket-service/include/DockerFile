@@ -1,0 +1,33 @@
+FROM ubuntu:22.04 AS builder
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    libssl-dev \
+    pkg-config \
+    libboost-system-dev \
+    libboost-thread-dev \
+    nlohmann-json3-dev \
+    librabbitmq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN cmake -S include -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j$(nproc)
+
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    libboost-system1.74.0 \
+    libboost-thread1.74.0 \
+    librabbitmq4 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/build/websocket-service /app/websocket-service
+
+EXPOSE 8080
+
+CMD ["/app/websocket-service"]

@@ -1,0 +1,100 @@
+version: "3.8"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  postgres-orders:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: orders_db
+      POSTGRES_USER: microservice
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres-orders-data:/var/lib/postgresql/data
+
+  postgres-payments:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: payments_db
+      POSTGRES_USER: microservice
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres-payments-data:/var/lib/postgresql/data
+
+  orders-service:
+    build:
+      context: ./orders-service
+      dockerfile: include/Dockerfile
+    environment:
+      DB_HOST: postgres-orders
+      DB_PORT: "5432"
+      DB_NAME: orders_db
+      DB_USER: microservice
+      DB_PASSWORD: password
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: admin
+      RABBITMQ_PASS: password
+    depends_on:
+      - postgres-orders
+      - rabbitmq
+
+  payments-service:
+    build:
+      context: ./payments-service
+      dockerfile: include/Dockerfile
+    environment:
+      DB_HOST: postgres-payments
+      DB_PORT: "5432"
+      DB_NAME: payments_db
+      DB_USER: microservice
+      DB_PASSWORD: password
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: admin
+      RABBITMQ_PASS: password
+    depends_on:
+      - postgres-payments
+      - rabbitmq
+
+  websocket-service:
+    build:
+      context: ./websocket-service
+      dockerfile: include/DockerFile
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: admin
+      RABBITMQ_PASS: password
+      WS_HOST: 0.0.0.0
+      WS_PORT: "8080"
+    depends_on:
+      - rabbitmq
+
+  frontend:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - orders-service
+      - payments-service
+      - websocket-service
+      - frontend
+
+volumes:
+  postgres-orders-data:
+  postgres-payments-data:

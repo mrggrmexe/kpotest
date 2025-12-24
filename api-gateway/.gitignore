@@ -1,0 +1,29 @@
+# Docker
+**/build/
+**/*.log
+**/uploads/
+.DS_Store
+
+# Скомпилированные файлы
+**/*.o
+**/*.so
+**/*.a
+**/file-service
+**/analysis-service
+**/api_gateway
+
+# Базы данных и временные файлы
+*.db
+*.sqlite
+*.pid
+*.sock
+
+# IDE файлы
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Системные файлы
+Thumbs.db

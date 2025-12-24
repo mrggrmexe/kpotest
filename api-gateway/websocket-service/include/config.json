@@ -1,0 +1,21 @@
+{
+  "server": {
+    "port": 8080,
+    "host": "0.0.0.0",
+    "max_connections": 1000,
+    "ping_interval": 30,
+    "ping_timeout": 60
+  },
+  "rabbitmq": {
+    "host": "localhost",
+    "port": "5672",
+    "user": "admin",
+    "password": "password",
+    "payment_result_queue": "payment.results"
+  },
+  "notification": {
+    "enabled": true,
+    "max_retries": 3,
+    "retry_delay_ms": 1000
+  }
+}
