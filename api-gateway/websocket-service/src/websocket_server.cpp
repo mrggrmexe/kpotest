@@ -4,9 +4,9 @@
 
 using json = nlohmann::json;
 
-WebSocketSession::WebSocketSession(tcp::socket socket, NotificationManager& notification_manager)
+WebSocketSession::WebSocketSession(tcp::socket socket, asio::io_context& ioc, NotificationManager& notification_manager)
     : ws_(std::move(socket)),
-      strand_(ws_.get_executor()),
+      strand_(asio::make_strand(ioc)),
       notification_manager_(notification_manager) {
 }
 
@@ -93,6 +93,7 @@ void WebSocketSession::do_write() {
     }
 
     writing_ = true;
+
     ws_.async_write(
         asio::buffer(write_queue_.front()),
         asio::bind_executor(
@@ -139,6 +140,6 @@ void WebSocketServer::do_accept() {
 
 void WebSocketServer::on_accept(beast::error_code ec, tcp::socket socket) {
     if (ec) return;
-    std::make_shared<WebSocketSession>(std::move(socket), notification_manager_)->start();
+    std::make_shared<WebSocketSession>(std::move(socket), ioc_, notification_manager_)->start();
     do_accept();
 }

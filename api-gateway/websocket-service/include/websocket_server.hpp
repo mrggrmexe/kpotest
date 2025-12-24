@@ -16,7 +16,7 @@ class NotificationManager;
 
 class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
 public:
-    WebSocketSession(tcp::socket socket, NotificationManager& notification_manager);
+    WebSocketSession(tcp::socket socket, asio::io_context& ioc, NotificationManager& notification_manager);
 
     void start();
     void send(std::string message);
@@ -31,7 +31,7 @@ private:
     void on_write(beast::error_code ec, std::size_t bytes_transferred);
 
     websocket::stream<tcp::socket> ws_;
-    asio::strand<asio::any_io_executor> strand_;
+    asio::strand<asio::io_context::executor_type> strand_;
     NotificationManager& notification_manager_;
     beast::flat_buffer buffer_;
     std::string order_id_;

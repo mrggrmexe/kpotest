@@ -5,6 +5,10 @@ project(websocket_service LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
 set(SERVICE_DIR ${CMAKE_CURRENT_LIST_DIR}/..)
 
 add_executable(websocket-service
@@ -19,7 +23,7 @@ target_include_directories(websocket-service PRIVATE
     ${SERVICE_DIR}/../common/include
 )
 
-find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost CONFIG REQUIRED COMPONENTS system)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
