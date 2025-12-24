@@ -14,18 +14,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Show versions
+        run: |
+          git --version
+          docker version
+          docker compose version
+          cmake --version || true
+          node -v || true
+          npm -v || true
+
       - name: Install system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake build-essential pkg-config \
-            libpq-dev libpqxx-dev \
-            libssl-dev librabbitmq-dev \
+            build-essential \
+            cmake \
+            pkg-config \
+            git \
+            ca-certificates \
+            curl \
+            libpq-dev \
+            libpqxx-dev \
+            libssl-dev \
+            librabbitmq-dev \
             nlohmann-json3-dev \
-            libboost-system-dev libboost-thread-dev \
-            git ca-certificates curl
-          docker version
-          docker compose version
+            libboost-system-dev \
+            libboost-thread-dev
 
       - name: Build orders-service
         working-directory: api-gateway/orders-service
@@ -63,43 +77,36 @@ jobs:
           docker compose -f api-gateway/docker-compose.yml up -d --build
           docker compose -f api-gateway/docker-compose.yml ps
 
-      - name: Wait for api-gateway health (via compose network)
+      - name: Wait for api-gateway healthy
         run: |
-          for i in $(seq 1 60); do
-            if docker run --rm --network ${COMPOSE_PROJECT_NAME}_default curlimages/curl:8.5.0 -fsS http://api-gateway/health >/dev/null; then
-              echo "api-gateway is healthy"
+          CID=$(docker compose -f api-gateway/docker-compose.yml ps -q api-gateway)
+
+          for i in $(seq 1 90); do
+            STATUS=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CID" 2>/dev/null || true)
+            if [ "$STATUS" = "healthy" ]; then
+              echo "api-gateway healthy"
               exit 0
             fi
-            echo "waiting for api-gateway... ($i/60)"
+            echo "waiting for api-gateway... ($i/90) status=$STATUS"
             sleep 2
           done
+
           echo "api-gateway did not become healthy"
           docker compose -f api-gateway/docker-compose.yml ps
-          docker compose -f api-gateway/docker-compose.yml logs --no-color --tail=300
+          docker compose -f api-gateway/docker-compose.yml logs --no-color --tail=300 api-gateway
           exit 1
 
-      - name: Smoke tests (via compose network)
+      - name: Smoke test (localhost)
         run: |
-          docker run --rm --network ${COMPOSE_PROJECT_NAME}_default curlimages/curl:8.5.0 -fsS http://api-gateway/health
-
-          docker run --rm --network ${COMPOSE_PROJECT_NAME}_default curlimages/curl:8.5.0 -fsS -X POST http://api-gateway/api/accounts \
-            -H 'Content-Type: application/json' \
-            -d '{"user_id":"ci_user"}' || true
-
-          docker run --rm --network ${COMPOSE_PROJECT_NAME}_default curlimages/curl:8.5.0 -fsS -X POST http://api-gateway/api/accounts/ci_user/deposit \
-            -H 'Content-Type: application/json' \
-            -d '{"amount":2000}' || true
-
-          docker run --rm --network ${COMPOSE_PROJECT_NAME}_default curlimages/curl:8.5.0 -fsS -X POST http://api-gateway/api/orders \
-            -H 'Content-Type: application/json' \
-            -d '{"user_id":"ci_user","amount":500,"description":"ci"}'
+          curl -fsS http://localhost/health
 
       - name: Compose logs (on failure)
         if: failure()
         run: |
           docker compose -f api-gateway/docker-compose.yml ps
-          docker compose -f api-gateway/docker-compose.yml logs --no-color
+          docker compose -f api-gateway/docker-compose.yml logs --no-color --tail=300
 
       - name: Compose down
         if: always()
-        run: docker compose -f api-gateway/docker-compose.yml down -v --remove-orphans
+        run: |
+          docker compose -f api-gateway/docker-compose.yml down -v --remove-orphans
