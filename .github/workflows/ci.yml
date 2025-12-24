@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres-orders:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: orders_db
+          POSTGRES_USER: microservice
+          POSTGRES_PASSWORD: password
+        options: >-
+          --health-cmd "pg_isready -U microservice" 
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      postgres-payments:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: payments_db
+          POSTGRES_USER: microservice
+          POSTGRES_PASSWORD: password
+        options: >-
+          --health-cmd "pg_isready -U microservice"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5433:5432
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install system deps
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          cmake build-essential libssl-dev librabbitmq-dev libpqxx-dev nlohmann-json3-dev
+
+    - name: Build Orders Service
+      working-directory: ./api-gateway/orders-service
+      run: |
+        mkdir -p build
+        cmake -S include -B build
+        cmake --build build -- -j
+
+    - name: Build Payments Service
+      working-directory: ./api-gateway/payments-service
+      run: |
+        mkdir -p build
+        cmake -S include -B build
+        cmake --build build -- -j
+
+    - name: Build Websocket Service
+      working-directory: ./api-gateway/websocket-service
+      run: |
+        sudo apt-get install -y libboost-system-dev libboost-thread-dev
+        mkdir -p build
+        cmake -S include -B build
+        cmake --build build -- -j
+
+    - name: Build Frontend
+      working-directory: ./api-gateway/src
+      run: |
+        sudo apt-get install -y nodejs npm
+        npm ci
+        npm run build
+
+    - name: Start services using Docker Compose
+      working-directory: ./api-gateway
+      run: |
+        docker compose up -d --build
+        sleep 20
+
+    - name: Smoke tests — Orders API
+      run: |
+        sleep 5
+        curl --fail http://localhost/api/orders/health || exit 1
+
+    - name: Smoke tests — Payments API
+      run: |
+        sleep 5
+        curl --fail http://localhost/api/accounts/health || exit 1
+
+    - name: Smoke tests — Websocket
+      run: |
+        sleep 5
+        timeout 5 bash -c "echo 'HEAD /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n' | nc localhost 8080 || true"
+
+    - name: Tear down
+      if: always()
+      run: |
+        docker compose down
