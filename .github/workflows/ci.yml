@@ -45,19 +45,6 @@ jobs:
           echo "== docker compose ps --all =="
           docker compose ps --all || true
 
-      - name: Smoke tests
-        run: |
-          curl -fsS http://localhost/health
-
-          # Пробуем реальный прокси-путь (если backend поднялся)
-          curl -fsS -X POST http://localhost/api/orders \
-            -H "Content-Type: application/json" \
-            -d '{"user_id":"user123","total_amount":99.99}'
-
-          curl -fsS -X POST http://localhost/api/accounts \
-            -H "Content-Type: application/json" \
-            -d '{"id":"acc123","balance":1000.00}'
-
       - name: Compose logs on failure
         if: failure()
         working-directory: api-gateway

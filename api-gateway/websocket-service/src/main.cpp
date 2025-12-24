@@ -5,13 +5,9 @@
 #include <cstdlib>
 #include <ctime>
 #include <csignal>
-#include <string>
-#include <initializer_list>
-
 #include <boost/asio.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <nlohmann/json.hpp>
-
 #include "message_queue.hpp"
 #include "notification_manager.hpp"
 #include "websocket_server.hpp"
@@ -19,18 +15,15 @@
 namespace asio = boost::asio;
 using json = nlohmann::json;
 
-static std::string env_any(std::initializer_list<const char*> keys, const char* def_val) {
-    for (auto* k : keys) {
-        if (const char* v = std::getenv(k)) {
-            if (*v) return std::string(v);
-        }
-    }
-    return std::string(def_val);
+static const char* env_or(const char* key, const char* def_val) {
+    const char* v = std::getenv(key);
+    return v ? v : def_val;
 }
 
 int main() {
     try {
         asio::io_context ioc;
+
         asio::signal_set signals(ioc, SIGINT, SIGTERM);
         std::atomic_bool running{true};
 
@@ -39,11 +32,11 @@ int main() {
             ioc.stop();
         });
 
-        MessageQueueConfig mq_config{
-            env_any({"MQ_HOST", "RABBITMQ_HOST"}, "localhost"),
-            env_any({"MQ_PORT", "RABBITMQ_PORT"}, "5672"),
-            env_any({"MQ_USER", "RABBITMQ_USER"}, "admin"),
-            env_any({"MQ_PASS", "RABBITMQ_PASS"}, "password")
+        auto mq_config = MessageQueueConfig{
+            env_or("RABBITMQ_HOST", "localhost"),
+            env_or("RABBITMQ_PORT", "5672"),
+            env_or("RABBITMQ_USER", "admin"),
+            env_or("RABBITMQ_PASS", "password")
         };
 
         NotificationManager notification_manager;
@@ -51,8 +44,7 @@ int main() {
 
         std::thread consumer([&]() {
             try {
-                message_queue.consume(
-                    "payment.results",
+                message_queue.consume("payment.results",
                     [&](const std::string& message) {
                         try {
                             auto j = json::parse(message);
@@ -68,7 +60,6 @@ int main() {
 
                             notification_manager.notify(order_id, notification);
                         } catch (...) {
-                            // ignore bad messages
                         }
                     },
                     running
@@ -81,10 +72,8 @@ int main() {
         });
 
         auto server = std::make_shared<WebSocketServer>(ioc, notification_manager);
-        server->run(
-            env_any({"WS_HOST"}, "0.0.0.0"),
-            static_cast<unsigned short>(std::stoi(env_any({"WS_PORT"}, "8080")))
-        );
+        server->run(env_or("WS_HOST", "0.0.0.0"),
+                    static_cast<unsigned short>(std::stoi(env_or("WS_PORT", "8080"))));
 
         std::cout << "WebSocket Service starting on port 8080..." << std::endl;
         ioc.run();
