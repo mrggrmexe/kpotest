@@ -20,6 +20,17 @@ target_include_directories(orders-service PRIVATE
     ${SERVICE_DIR}/../common/include
 )
 
+include(FetchContent)
+
+FetchContent_Declare(httplib
+    URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.12.4.tar.gz
+)
+FetchContent_MakeAvailable(httplib)
+
+target_include_directories(orders-service PRIVATE
+    ${httplib_SOURCE_DIR}
+)
+
 find_package(nlohmann_json CONFIG REQUIRED)
 
 find_package(pqxx CONFIG QUIET)

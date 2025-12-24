@@ -21,6 +21,7 @@ jobs:
             nlohmann-json3-dev \
             libboost-system-dev libboost-thread-dev \
             curl
+          sudo apt-get install -y git ca-certificates
           docker version
           docker compose version
 
