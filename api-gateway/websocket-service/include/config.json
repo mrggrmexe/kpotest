@@ -7,7 +7,7 @@
     "ping_timeout": 60
   },
   "rabbitmq": {
-    "host": "localhost",
+    "host": "rabbitmq",
     "port": "5672",
     "user": "admin",
     "password": "password",
