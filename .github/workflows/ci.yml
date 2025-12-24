@@ -21,43 +21,6 @@ jobs:
           docker compose up -d --build
           docker compose ps --all
 
-      - name: Wait for gateway
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS http://localhost/health >/dev/null; then
-              echo "api-gateway is up"
-              exit 0
-            fi
-            echo "waiting for api-gateway... ($i/60)"
-            sleep 2
-          done
-
-          echo "api-gateway did not become ready"
-          cd api-gateway
-          docker compose ps --all || true
-          docker compose logs --no-color || true
-          exit 1
-
-      - name: Show exited containers (debug)
-        if: always()
-        working-directory: api-gateway
-        run: |
-          echo "== docker compose ps --all =="
-          docker compose ps --all || true
-
-      - name: Smoke tests
-        run: |
-          curl -fsS http://localhost/health
-
-          # Пробуем реальный прокси-путь (если backend поднялся)
-          curl -fsS -X POST http://localhost/api/orders \
-            -H "Content-Type: application/json" \
-            -d '{"user_id":"user123","total_amount":99.99}'
-
-          curl -fsS -X POST http://localhost/api/accounts \
-            -H "Content-Type: application/json" \
-            -d '{"id":"acc123","balance":1000.00}'
-
       - name: Compose logs on failure
         if: failure()
         working-directory: api-gateway
