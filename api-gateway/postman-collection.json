@@ -73,18 +73,6 @@
           }
         }
       ]
-    },
-    {
-      "name": "Health",
-      "item": [
-        {
-          "name": "Gateway",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/"
-          }
-        }
-      ]
     }
   ]
 }

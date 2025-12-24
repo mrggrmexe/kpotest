@@ -54,22 +54,6 @@ struct Account {
     }
 };
 
-struct OutboxEvent {
-    std::string id;
-    std::string type;
-    json payload;
-    std::string status;
-    std::chrono::system_clock::time_point created_at{std::chrono::system_clock::now()};
-};
-
-struct InboxEvent {
-    std::string id;
-    std::string type;
-    json payload;
-    std::string status;
-    std::chrono::system_clock::time_point processed_at{std::chrono::system_clock::now()};
-};
-
 namespace messages {
 
 struct PaymentRequest {

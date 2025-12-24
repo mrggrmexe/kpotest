@@ -52,7 +52,7 @@ MessageQueue::~MessageQueue() {
 void MessageQueue::publish(const std::string& queue, const std::string& message) {
     amqp_bytes_t queue_bytes = amqp_cstring_bytes(queue.c_str());
 
-    auto declare = amqp_queue_declare(connection_, channel_, queue_bytes, 0, 1, 0, 0, amqp_empty_table);
+    amqp_queue_declare(connection_, channel_, queue_bytes, 0, 1, 0, 0, amqp_empty_table);
     auto reply = amqp_get_rpc_reply(connection_);
     ensure_ok(reply, "queue_declare");
 
@@ -93,8 +93,6 @@ void MessageQueue::consume(const std::string& queue,
                             envelope.message.body.len);
             callback(msg);
             amqp_destroy_envelope(&envelope);
-        } else if (ret.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION) {
-            throw std::runtime_error("RabbitMQ consume library exception");
         } else {
             throw std::runtime_error("RabbitMQ consume error");
         }

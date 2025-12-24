@@ -24,38 +24,22 @@ pqxx::transaction_base& Database::begin_transaction() {
 }
 
 pqxx::result Database::query(const std::string& sql) {
-    try {
-        pqxx::nontransaction nt(*conn_);
-        return nt.exec(sql);
-    } catch (const std::exception& e) {
-        throw std::runtime_error("Query failed: " + std::string(e.what()));
-    }
+    pqxx::nontransaction nt(*conn_);
+    return nt.exec(sql);
 }
 
 pqxx::result Database::query(pqxx::transaction_base& tx, const std::string& sql) {
-    try {
-        return tx.exec(sql);
-    } catch (const std::exception& e) {
-        throw std::runtime_error("Query failed: " + std::string(e.what()));
-    }
+    return tx.exec(sql);
 }
 
 void Database::execute(const std::string& sql) {
-    try {
-        pqxx::work w(*conn_);
-        w.exec(sql);
-        w.commit();
-    } catch (const std::exception& e) {
-        throw std::runtime_error("Execute failed: " + std::string(e.what()));
-    }
+    pqxx::work w(*conn_);
+    w.exec(sql);
+    w.commit();
 }
 
 void Database::execute(pqxx::transaction_base& tx, const std::string& sql) {
-    try {
-        tx.exec(sql);
-    } catch (const std::exception& e) {
-        throw std::runtime_error("Execute failed: " + std::string(e.what()));
-    }
+    tx.exec(sql);
 }
 
 void Database::initialize_schema() {
