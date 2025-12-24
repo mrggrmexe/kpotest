@@ -3,23 +3,22 @@ FROM ubuntu:22.04 AS builder
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
+    git \
     libpqxx-dev \
     libssl-dev \
     librabbitmq-dev \
     nlohmann-json3-dev \
     pkg-config \
-    wget \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /tmp
-RUN wget https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.12.4.tar.gz \
-    && tar -xzf v0.12.4.tar.gz \
-    && cp cpp-httplib-0.12.4/httplib.h /usr/local/include/
-
 WORKDIR /app
-COPY . .
+COPY common ./common
+COPY orders-service ./orders-service
 
-RUN cmake -S include -B build -DCMAKE_BUILD_TYPE=Release \
+WORKDIR /app/orders-service
+RUN rm -rf build \
+    && cmake -S include -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build -j$(nproc)
 
 FROM ubuntu:22.04
@@ -28,10 +27,10 @@ RUN apt-get update && apt-get install -y \
     libpqxx-6.4 \
     libssl3 \
     librabbitmq4 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/build/orders-service /app/orders-service
+COPY --from=builder /app/orders-service/build/orders-service /app/orders-service
 
 EXPOSE 8080
-
 CMD ["/app/orders-service"]

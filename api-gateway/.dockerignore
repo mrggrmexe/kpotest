@@ -1,0 +1,12 @@
+**/build
+**/CMakeCache.txt
+**/CMakeFiles
+**/*.o
+**/*.a
+**/*.so
+**/*.dylib
+**/node_modules
+**/dist
+**/.DS_Store
+.git
+.github

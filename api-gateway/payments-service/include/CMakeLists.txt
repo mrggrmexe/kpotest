@@ -7,6 +7,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(SERVICE_DIR ${CMAKE_CURRENT_LIST_DIR}/..)
 
+set(COMMON_INCLUDE_DIR "${SERVICE_DIR}/../common/include")
+if(NOT EXISTS "${COMMON_INCLUDE_DIR}")
+    set(COMMON_INCLUDE_DIR "${SERVICE_DIR}/common/include")
+endif()
+if(NOT EXISTS "${COMMON_INCLUDE_DIR}")
+    message(FATAL_ERROR "common/include not found. Expected ../common/include or common/include")
+endif()
+
 add_executable(payments-service
     ${SERVICE_DIR}/src/main.cpp
     ${SERVICE_DIR}/src/payment_service.cpp
@@ -18,15 +26,19 @@ add_executable(payments-service
 
 target_include_directories(payments-service PRIVATE
     ${SERVICE_DIR}/include
-    ${SERVICE_DIR}/../common/include
+    ${COMMON_INCLUDE_DIR}
 )
 
 include(FetchContent)
 
 FetchContent_Declare(httplib
-    URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.12.4.tar.gz
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG v0.12.4
 )
-FetchContent_MakeAvailable(httplib)
+FetchContent_GetProperties(httplib)
+if(NOT httplib_POPULATED)
+    FetchContent_Populate(httplib)
+endif()
 
 target_include_directories(payments-service PRIVATE
     ${httplib_SOURCE_DIR}

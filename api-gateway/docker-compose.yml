@@ -30,8 +30,8 @@ services:
 
   orders-service:
     build:
-      context: ./orders-service
-      dockerfile: include/Dockerfile
+      context: .
+      dockerfile: orders-service/include/Dockerfile
     environment:
       DB_HOST: postgres-orders
       DB_PORT: "5432"
@@ -48,8 +48,8 @@ services:
 
   payments-service:
     build:
-      context: ./payments-service
-      dockerfile: include/Dockerfile
+      context: .
+      dockerfile: payments-service/include/Dockerfile
     environment:
       DB_HOST: postgres-payments
       DB_PORT: "5432"
@@ -66,8 +66,8 @@ services:
 
   websocket-service:
     build:
-      context: ./websocket-service
-      dockerfile: include/DockerFile
+      context: .
+      dockerfile: websocket-service/include/Dockerfile
     environment:
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: "5672"
