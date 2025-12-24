@@ -1,109 +1,164 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
-#include <atomic>
-#include <csignal>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
 
-#include "database.hpp"
-#include "message_queue.hpp"
 #include "payment_service.hpp"
 #include "inbox_processor.hpp"
+#include "outbox_processor.hpp"
 
-static std::atomic_bool g_stop{false};
+using json = nlohmann::json;
 
 static std::string env_str(const char* key, const std::string& def) {
-  const char* v = std::getenv(key);
-  return (v && *v) ? std::string(v) : def;
+  if (const char* v = std::getenv(key); v && *v) return std::string(v);
+  return def;
 }
 
 static int env_int(const char* key, int def) {
-  const char* v = std::getenv(key);
-  if (!v || !*v) return def;
-  try { return std::stoi(v); } catch (...) { return def; }
+  try { return std::stoi(env_str(key, std::to_string(def))); }
+  catch (...) { return def; }
 }
 
-static nlohmann::json read_json_file(const std::string& path) {
-  std::ifstream f(path);
-  if (!f.is_open()) return nlohmann::json::object();
-  nlohmann::json j;
-  try { f >> j; } catch (...) { return nlohmann::json::object(); }
-  return j;
+static std::optional<json> load_json_any(const std::initializer_list<std::string>& paths) {
+  for (const auto& p : paths) {
+    std::ifstream in(p);
+    if (!in.good()) continue;
+    json j; in >> j;
+    return j;
+  }
+  return std::nullopt;
 }
-
-static std::string pg_conninfo(const std::string& host, int port,
-                               const std::string& db, const std::string& user,
-                               const std::string& pass) {
-  std::string s = "host=" + host + " port=" + std::to_string(port) + " dbname=" + db + " user=" + user;
-  if (!pass.empty()) s += " password=" + pass;
-  return s;
-}
-
-static void handle_signal(int) { g_stop.store(true); }
 
 int main(int argc, char** argv) {
-  std::signal(SIGINT, handle_signal);
-  std::signal(SIGTERM, handle_signal);
-
-  const std::string config_path = (argc > 1) ? argv[1] : env_str("CONFIG_PATH", "config.json");
-  const auto cfg = read_json_file(config_path);
-
-  const std::string host = env_str("HOST", cfg.value("host", std::string("0.0.0.0")));
-  const int port = env_int("PORT", cfg.value("port", 8080));
-
-  const auto dbj = cfg.value("db", nlohmann::json::object());
-  const std::string db_host = env_str("DB_HOST", dbj.value("host", std::string("postgres-payments")));
-  const int db_port = env_int("DB_PORT", dbj.value("port", 5432));
-  const std::string db_name = env_str("DB_NAME", dbj.value("name", std::string("payments")));
-  const std::string db_user = env_str("DB_USER", dbj.value("user", std::string("postgres")));
-  const std::string db_pass = env_str("DB_PASS", dbj.value("password", std::string("postgres")));
-
-  const auto mqj = cfg.value("rabbitmq", nlohmann::json::object());
-  MessageQueueConfig mq{};
-  mq.host = env_str("MQ_HOST", mqj.value("host", std::string("rabbitmq")));
-  mq.port = env_int("MQ_PORT", mqj.value("port", 5672));
-  mq.username = env_str("MQ_USER", mqj.value("username", std::string("admin")));
-  mq.password = env_str("MQ_PASS", mqj.value("password", std::string("admin")));
-  mq.vhost = env_str("MQ_VHOST", mqj.value("vhost", std::string("/")));
-
   try {
-    auto db = std::make_shared<Database>(pg_conninfo(db_host, db_port, db_name, db_user, db_pass));
-    db->init_schema();
+    std::string cfg_path = (argc > 1) ? argv[1] : env_str("CONFIG_PATH", "");
+    std::optional<json> cfg;
 
-    PaymentService payment_service(db);
-    InboxProcessor inbox(db, mq, payment_service);
+    if (!cfg_path.empty()) cfg = load_json_any({cfg_path});
+    else cfg = load_json_any({"config.json", "include/config.json"});
 
-    std::thread inbox_thread([&] { inbox.run(); });
+    const std::string bind_host = env_str("PAYMENTS_BIND", "0.0.0.0");
+    const int port = env_int("PAYMENTS_PORT", 8081);
 
-    httplib::Server server;
+    // DB defaults must be service-name, not localhost
+    const std::string db_host = env_str("DB_HOST", cfg ? (*cfg)["database"].value("host", "postgres-payments") : "postgres-payments");
+    const std::string db_port = env_str("DB_PORT", cfg ? std::to_string((*cfg)["database"].value("port", 5432)) : "5432");
+    const std::string db_name = env_str("DB_NAME", cfg ? (*cfg)["database"].value("name", "payments_db") : "payments_db");
+    const std::string db_user = env_str("DB_USER", cfg ? (*cfg)["database"].value("user", "postgres") : "postgres");
+    const std::string db_pass = env_str("DB_PASSWORD", cfg ? (*cfg)["database"].value("password", "password") : "password");
 
-    server.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-      res.set_content("ok\n", "text/plain");
-      res.status = 200;
-    });
+    std::shared_ptr<Database> db;
 
-    server.Get("/", [](const httplib::Request&, httplib::Response& res) {
-      res.set_content("payments-service\n", "text/plain");
-      res.status = 200;
-    });
-
-    std::thread http_thread([&] {
-      server.listen(host.c_str(), port);
-    });
-
-    while (!g_stop.load()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (int i = 1; i <= 60; i++) {
+      try {
+        db = std::make_shared<Database>(db_host, db_port, db_name, db_user, db_pass);
+        db->initialize_schema();
+        break;
+      } catch (const std::exception& e) {
+        if (i == 60) throw;
+        std::cerr << "DB not ready (" << i << "/60): " << e.what() << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+      }
     }
 
-    server.stop();
-    inbox.stop();
+    MessageQueueConfig mq_cfg{
+      env_str("MQ_HOST", cfg ? (*cfg)["message_queue"].value("host", "rabbitmq") : "rabbitmq"),
+      env_int("MQ_PORT", cfg ? (*cfg)["message_queue"].value("port", 5672) : 5672),
+      env_str("MQ_USER", cfg ? (*cfg)["message_queue"].value("user", "admin") : "admin"),
+      env_str("MQ_PASSWORD", cfg ? (*cfg)["message_queue"].value("password", "admin") : "admin"),
+    };
 
-    if (http_thread.joinable()) http_thread.join();
-    if (inbox_thread.joinable()) inbox_thread.join();
+    PaymentService payments(db, mq_cfg);
+
+    // фоновые обработчики (если используются в твоём проекте)
+    InboxProcessor inbox(db, mq_cfg);
+    OutboxProcessor outbox(db, mq_cfg);
+    std::thread([&] { inbox.run(); }).detach();
+    std::thread([&] { outbox.run(); }).detach();
+
+    httplib::Server svr;
+
+    svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content("ok\n", "text/plain");
+    });
+
+    // POST /api/accounts  (smoke_tests)
+    svr.Post("/api/accounts", [&](const httplib::Request& req, httplib::Response& res) {
+      try {
+        auto body = json::parse(req.body);
+        const std::string user_id = body.value("user_id", "");
+        if (user_id.empty()) {
+          res.status = 400;
+          res.set_content(R"({"error":"user_id required"})", "application/json");
+          return;
+        }
+        auto acc = payments.create_account(user_id);
+        res.status = 201;
+        res.set_content(acc.to_json().dump(), "application/json");
+      } catch (const std::exception& e) {
+        res.status = 500;
+        res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+      }
+    });
+
+    // POST /api/accounts/<user_id>/deposit  (smoke_tests)
+    svr.Post(R"(/api/accounts/([^/]+)/deposit)", [&](const httplib::Request& req, httplib::Response& res) {
+      try {
+        const std::string user_id = req.matches[1];
+        auto body = json::parse(req.body);
+        const double amount = body.value("amount", 0.0);
+        if (amount <= 0.0) {
+          res.status = 400;
+          res.set_content(R"({"error":"amount must be > 0"})", "application/json");
+          return;
+        }
+        auto acc = payments.deposit(user_id, amount);
+        res.set_content(acc.to_json().dump(), "application/json");
+      } catch (const std::exception& e) {
+        res.status = 500;
+        res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+      }
+    });
+
+    // POST /api/accounts/<user_id>/withdraw
+    svr.Post(R"(/api/accounts/([^/]+)/withdraw)", [&](const httplib::Request& req, httplib::Response& res) {
+      try {
+        const std::string user_id = req.matches[1];
+        auto body = json::parse(req.body);
+        const double amount = body.value("amount", 0.0);
+        if (amount <= 0.0) {
+          res.status = 400;
+          res.set_content(R"({"error":"amount must be > 0"})", "application/json");
+          return;
+        }
+        auto acc = payments.withdraw(user_id, amount);
+        res.set_content(acc.to_json().dump(), "application/json");
+      } catch (const std::exception& e) {
+        res.status = 500;
+        res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+      }
+    });
+
+    // GET /api/accounts/<user_id>
+    svr.Get(R"(/api/accounts/([^/]+))", [&](const httplib::Request& req, httplib::Response& res) {
+      try {
+        const std::string user_id = req.matches[1];
+        const double balance = payments.get_balance(user_id);
+        res.set_content(json{{"user_id", user_id}, {"balance", balance}}.dump(), "application/json");
+      } catch (const std::exception& e) {
+        res.status = 404;
+        res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+      }
+    });
+
+    std::cout << "payments-service listening on " << bind_host << ":" << port << std::endl;
+    svr.listen(bind_host.c_str(), port);
     return 0;
 
   } catch (const std::exception& e) {
