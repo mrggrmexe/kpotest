@@ -1,135 +1,128 @@
-#include "httplib.h"
+#include <iostream>
+#include <thread>
+#include <memory>
+#include <cstdlib>
+#include <string>
+#include <initializer_list>
+
+#include <httplib.h>
 #include <nlohmann/json.hpp>
 
-#include <chrono>
-#include <cstdlib>
-#include <fstream>
-#include <optional>
-#include <string>
-#include <thread>
-
-#include "../include/order_service.hpp"
-#include "../include/outbox_processor.hpp"
+#include "database.hpp"
+#include "order_service.hpp"
+#include "outbox_processor.hpp"
 
 using json = nlohmann::json;
+using namespace httplib;
 
-static std::string env_str(const char* key, const std::string& def) {
-  if (const char* v = std::getenv(key)) {
-    if (*v) return std::string(v);
-  }
-  return def;
-}
-
-static int env_int(const char* key, int def) {
-  if (const char* v = std::getenv(key)) {
-    try { return std::stoi(v); } catch (...) {}
-  }
-  return def;
-}
-
-static std::optional<json> load_config(const std::string& path) {
-  std::ifstream f(path);
-  if (!f) return std::nullopt;
-  json j;
-  try {
-    f >> j;
-    return j;
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
-static std::string json_port_to_string(const json& j, const std::string& key, const std::string& def) {
-  if (!j.contains(key)) return def;
-  const auto& v = j.at(key);
-  if (v.is_string()) return v.get<std::string>();
-  if (v.is_number_integer()) return std::to_string(v.get<int>());
-  if (v.is_number_float()) return std::to_string(static_cast<int>(v.get<double>()));
-  return def;
-}
-
-int main(int argc, char** argv) {
-  std::string config_path = env_str("CONFIG_PATH", "include/config.json");
-  auto cfg = load_config(config_path);
-
-  json serverj = cfg ? (*cfg).value("server", json::object()) : json::object();
-  json dbj = cfg ? (*cfg).value("database", json::object()) : json::object();
-  json mqj = cfg ? ((*cfg).contains("rabbitmq") ? (*cfg)["rabbitmq"] : (*cfg).value("message_queue", json::object()))
-                 : json::object();
-
-  std::string host = env_str("HOST", serverj.value("host", std::string("0.0.0.0")));
-  int port = env_int("PORT", serverj.value("port", 8080));
-
-  std::string db_host = env_str("DB_HOST", dbj.value("host", std::string("postgres-orders")));
-  std::string db_port = env_str("DB_PORT", json_port_to_string(dbj, "port", "5432"));
-  std::string db_name = env_str("DB_NAME", dbj.value("dbname", std::string("orders_db")));
-  std::string db_user = env_str("DB_USER", dbj.value("user", std::string("microservice")));
-  std::string db_pass = env_str("DB_PASSWORD", dbj.value("password", std::string("password")));
-
-  std::string mq_host = env_str("MQ_HOST", mqj.value("host", std::string("rabbitmq")));
-  std::string mq_port = env_str("MQ_PORT", json_port_to_string(mqj, "port", "5672"));
-  std::string mq_user = env_str("MQ_USER", mqj.value("user", std::string("admin")));
-  std::string mq_pass = env_str("MQ_PASSWORD", mqj.value("password", std::string("admin")));
-
-  auto db = std::make_shared<Database>(db_host, db_port, db_name, db_user, db_pass);
-  db->initialize_schema();
-
-  MessageQueueConfig mq_cfg{mq_host, mq_port, mq_user, mq_pass};
-
-  OrderService orders(db, mq_cfg);
-
-  std::thread outbox_thread([&]() {
-    for (;;) {
-      try {
-        OutboxProcessor outbox(db, mq_cfg);
-        outbox.run();
-      } catch (...) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-      }
+static std::string env_any(std::initializer_list<const char*> keys, const char* def_val) {
+    for (auto* k : keys) {
+        if (const char* v = std::getenv(k)) {
+            if (*v) return std::string(v);
+        }
     }
-  });
-  outbox_thread.detach();
+    return std::string(def_val);
+}
 
-  httplib::Server svr;
-
-  svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-    res.set_content("ok", "text/plain");
-  });
-
-  svr.Post("/api/orders", [&](const httplib::Request& req, httplib::Response& res) {
+int main() {
     try {
-      auto body = json::parse(req.body);
-      std::string user_id = body.value("user_id", "");
-      std::string product_id = body.value("product_id", "");
-      int quantity = body.value("quantity", 0);
-      double price = body.value("price", 0.0);
+        auto db = std::make_shared<Database>(
+            env_any({"DB_HOST", "POSTGRES_HOST"}, "localhost"),
+            env_any({"DB_PORT", "POSTGRES_PORT"}, "5432"),
+            env_any({"DB_NAME"}, "orders_db"),
+            env_any({"DB_USER", "POSTGRES_USER"}, "microservice"),
+            env_any({"DB_PASSWORD", "POSTGRES_PASSWORD"}, "password")
+        );
 
-      if (user_id.empty() || product_id.empty() || quantity <= 0 || price <= 0.0) {
-        res.status = 400;
-        res.set_content(R"({"error":"invalid payload"})", "application/json");
-        return;
-      }
+        db->initialize_schema();
 
-      int order_id = orders.create_order(user_id, product_id, quantity, price);
-      json out = {{"order_id", order_id}};
-      res.status = 201;
-      res.set_content(out.dump(), "application/json");
-    } catch (...) {
-      res.status = 400;
-      res.set_content(R"({"error":"invalid json"})", "application/json");
+        MessageQueueConfig mq_config{
+            env_any({"MQ_HOST", "RABBITMQ_HOST"}, "localhost"),
+            env_any({"MQ_PORT", "RABBITMQ_PORT"}, "5672"),
+            env_any({"MQ_USER", "RABBITMQ_USER"}, "admin"),
+            env_any({"MQ_PASS", "RABBITMQ_PASS"}, "password")
+        };
+
+        OrderService order_service(db, mq_config);
+        OutboxProcessor outbox_processor(db, mq_config);
+
+        std::thread outbox_thread([&]() { outbox_processor.run(); });
+
+        Server svr;
+
+        svr.Post("/api/orders", [&](const Request& req, Response& res) {
+            try {
+                auto body = json::parse(req.body);
+                auto user_id = body.at("user_id").get<std::string>();
+                auto amount = body.at("amount").get<double>();
+                auto description = body.value("description", std::string{});
+
+                auto order = order_service.create_order(user_id, amount, description);
+                res.set_content(order.to_json().dump(), "application/json");
+                res.status = 201;
+            } catch (const std::exception& e) {
+                json err = {{"error", e.what()}};
+                res.set_content(err.dump(), "application/json");
+                res.status = 400;
+            }
+        });
+
+        svr.Get("/api/orders", [&](const Request& req, Response& res) {
+            try {
+                auto user_id = req.get_param_value("user_id");
+                if (user_id.empty()) {
+                    res.status = 400;
+                    res.set_content(R"({"error":"user_id is required"})", "application/json");
+                    return;
+                }
+
+                auto orders = order_service.get_user_orders(user_id);
+                json arr = json::array();
+                for (const auto& o : orders) arr.push_back(o.to_json());
+
+                res.set_content(arr.dump(), "application/json");
+                res.status = 200;
+            } catch (const std::exception& e) {
+                json err = {{"error", e.what()}};
+                res.set_content(err.dump(), "application/json");
+                res.status = 500;
+            }
+        });
+
+        svr.Get(R"(/api/orders/([A-Za-z0-9\-]+))", [&](const Request& req, Response& res) {
+            try {
+                auto order_id = req.matches[1].str();
+                auto order = order_service.get_order(order_id);
+
+                if (order.id.empty()) {
+                    res.status = 404;
+                    res.set_content(R"({"error":"Order not found"})", "application/json");
+                    return;
+                }
+
+                res.set_content(order.to_json().dump(), "application/json");
+                res.status = 200;
+            } catch (const std::exception& e) {
+                json err = {{"error", e.what()}};
+                res.set_content(err.dump(), "application/json");
+                res.status = 500;
+            }
+        });
+
+        svr.Get("/health", [](const Request&, Response& res) {
+            res.set_content("OK", "text/plain");
+            res.status = 200;
+        });
+
+        std::cout << "Orders Service starting on port 8080..." << std::endl;
+        svr.listen("0.0.0.0", 8080);
+
+        outbox_processor.stop();
+        if (outbox_thread.joinable()) outbox_thread.join();
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 1;
     }
-  });
 
-  svr.Get("/api/orders", [&](const httplib::Request&, httplib::Response& res) {
-    try {
-      auto list = orders.list_orders();
-      res.set_content(list.dump(), "application/json");
-    } catch (...) {
-      res.status = 500;
-      res.set_content(R"({"error":"internal"})", "application/json");
-    }
-  });
-
-  svr.listen(host.c_str(), port);
-  return 0;
+    return 0;
 }
