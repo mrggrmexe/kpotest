@@ -1,5 +1,5 @@
 #include "inbox_processor.hpp"
-#include <uuid.h>
+#include "utils.hpp"
 #include <thread>
 #include <chrono>
 
@@ -66,8 +66,8 @@ void InboxProcessor::handle_payment_request(const std::string& message) {
         result.success = success;
         result.message = success ? "Payment successful" : "Payment failed";
         
-        uuids::uuid_random_generator uuid_gen;
-        auto outbox_id = uuids::to_string(uuid_gen());
+        auto outbox_id = utils::generate_uuid();
+
         
         db_->execute(tx,
             "INSERT INTO outbox_events (id, type, payload, status, created_at) "
