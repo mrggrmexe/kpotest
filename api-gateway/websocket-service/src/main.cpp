@@ -1,89 +1,88 @@
-#include <iostream>
-#include <memory>
-#include <thread>
-#include <atomic>
-#include <cstdlib>
-#include <ctime>
-#include <csignal>
-#include <boost/asio.hpp>
-#include <boost/asio/signal_set.hpp>
 #include <nlohmann/json.hpp>
+
+#include <boost/asio.hpp>
+
+#include <atomic>
+#include <csignal>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <thread>
+
 #include "message_queue.hpp"
 #include "notification_manager.hpp"
 #include "websocket_server.hpp"
 
-namespace asio = boost::asio;
-using json = nlohmann::json;
+static std::atomic_bool g_stop{false};
 
-static const char* env_or(const char* key, const char* def_val) {
-    const char* v = std::getenv(key);
-    return v ? v : def_val;
+static std::string env_str(const char* key, const std::string& def) {
+  const char* v = std::getenv(key);
+  return (v && *v) ? std::string(v) : def;
 }
 
-int main() {
-    try {
-        asio::io_context ioc;
+static int env_int(const char* key, int def) {
+  const char* v = std::getenv(key);
+  if (!v || !*v) return def;
+  try { return std::stoi(v); } catch (...) { return def; }
+}
 
-        asio::signal_set signals(ioc, SIGINT, SIGTERM);
-        std::atomic_bool running{true};
+static nlohmann::json read_json_file(const std::string& path) {
+  std::ifstream f(path);
+  if (!f.is_open()) return nlohmann::json::object();
+  nlohmann::json j;
+  try { f >> j; } catch (...) { return nlohmann::json::object(); }
+  return j;
+}
 
-        signals.async_wait([&](const boost::system::error_code&, int) {
-            running.store(false);
-            ioc.stop();
+static void handle_signal(int) { g_stop.store(true); }
+
+int main(int argc, char** argv) {
+  std::signal(SIGINT, handle_signal);
+  std::signal(SIGTERM, handle_signal);
+
+  const std::string config_path = (argc > 1) ? argv[1] : env_str("CONFIG_PATH", "config.json");
+  const auto cfg = read_json_file(config_path);
+
+  const std::string host = env_str("HOST", cfg.value("host", std::string("0.0.0.0")));
+  const int port = env_int("PORT", cfg.value("port", 8080));
+
+  const auto mqj = cfg.value("rabbitmq", nlohmann::json::object());
+  MessageQueueConfig mq{};
+  mq.host = env_str("MQ_HOST", mqj.value("host", std::string("rabbitmq")));
+  mq.port = env_int("MQ_PORT", mqj.value("port", 5672));
+  mq.username = env_str("MQ_USER", mqj.value("username", std::string("admin")));
+  mq.password = env_str("MQ_PASS", mqj.value("password", std::string("admin")));
+  mq.vhost = env_str("MQ_VHOST", mqj.value("vhost", std::string("/")));
+
+  try {
+    boost::asio::io_context ioc(1);
+
+    NotificationManager notifications;
+
+    auto addr = boost::asio::ip::make_address(host);
+    boost::asio::ip::tcp::endpoint ep{addr, static_cast<unsigned short>(port)};
+
+    WebSocketServer server(ioc, ep, notifications);
+    server.run();
+
+    std::thread mq_thread([&] {
+      try {
+        MessageQueue mq_client(mq);
+        mq_client.consume("payment.notifications", [&](const std::string& msg) {
+          notifications.broadcast_message(msg);
         });
+      } catch (const std::exception& e) {
+        std::cerr << "MQ thread fatal: " << e.what() << std::endl;
+      }
+    });
+    mq_thread.detach();
 
-        auto mq_config = MessageQueueConfig{
-            env_or("RABBITMQ_HOST", "localhost"),
-            env_or("RABBITMQ_PORT", "5672"),
-            env_or("RABBITMQ_USER", "admin"),
-            env_or("RABBITMQ_PASS", "password")
-        };
-
-        NotificationManager notification_manager;
-        MessageQueue message_queue(mq_config);
-
-        std::thread consumer([&]() {
-            try {
-                message_queue.consume("payment.results",
-                    [&](const std::string& message) {
-                        try {
-                            auto j = json::parse(message);
-                            auto order_id = j.at("order_id").get<std::string>();
-
-                            json notification = {
-                                {"type", "order_update"},
-                                {"order_id", order_id},
-                                {"status", j.value("success", false) ? "FINISHED" : "CANCELLED"},
-                                {"message", j.value("message", std::string{})},
-                                {"timestamp", std::time(nullptr)}
-                            };
-
-                            notification_manager.notify(order_id, notification);
-                        } catch (...) {
-                        }
-                    },
-                    running
-                );
-            } catch (const std::exception& e) {
-                std::cerr << "Consumer error: " << e.what() << std::endl;
-                running.store(false);
-                ioc.stop();
-            }
-        });
-
-        auto server = std::make_shared<WebSocketServer>(ioc, notification_manager);
-        server->run(env_or("WS_HOST", "0.0.0.0"),
-                    static_cast<unsigned short>(std::stoi(env_or("WS_PORT", "8080"))));
-
-        std::cout << "WebSocket Service starting on port 8080..." << std::endl;
-        ioc.run();
-
-        running.store(false);
-        if (consumer.joinable()) consumer.join();
-    } catch (const std::exception& e) {
-        std::cerr << "Fatal error: " << e.what() << std::endl;
-        return 1;
-    }
-
+    ioc.run();
     return 0;
+
+  } catch (const std::exception& e) {
+    std::cerr << "Fatal error: " << e.what() << std::endl;
+    return 1;
+  }
 }

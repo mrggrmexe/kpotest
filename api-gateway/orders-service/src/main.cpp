@@ -1,122 +1,113 @@
-#include <iostream>
-#include <thread>
-#include <memory>
-#include <cstdlib>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
+
+#include <atomic>
+#include <csignal>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <thread>
+
 #include "database.hpp"
+#include "message_queue.hpp"
 #include "order_service.hpp"
 #include "outbox_processor.hpp"
 
-using json = nlohmann::json;
-using namespace httplib;
+static std::atomic_bool g_stop{false};
 
-static const char* env_or(const char* key, const char* def_val) {
-    const char* v = std::getenv(key);
-    return v ? v : def_val;
+static std::string env_str(const char* key, const std::string& def) {
+  const char* v = std::getenv(key);
+  return (v && *v) ? std::string(v) : def;
 }
 
-int main() {
-    try {
-        auto db = std::make_shared<Database>(
-            env_or("DB_HOST", "localhost"),
-            env_or("DB_PORT", "5432"),
-            env_or("DB_NAME", "orders_db"),
-            env_or("DB_USER", "microservice"),
-            env_or("DB_PASSWORD", "password")
-        );
+static int env_int(const char* key, int def) {
+  const char* v = std::getenv(key);
+  if (!v || !*v) return def;
+  try { return std::stoi(v); } catch (...) { return def; }
+}
 
-        db->initialize_schema();
+static nlohmann::json read_json_file(const std::string& path) {
+  std::ifstream f(path);
+  if (!f.is_open()) return nlohmann::json::object();
+  nlohmann::json j;
+  try { f >> j; } catch (...) { return nlohmann::json::object(); }
+  return j;
+}
 
-        auto mq_config = MessageQueueConfig{
-            env_or("RABBITMQ_HOST", "localhost"),
-            env_or("RABBITMQ_PORT", "5672"),
-            env_or("RABBITMQ_USER", "admin"),
-            env_or("RABBITMQ_PASS", "password")
-        };
+static std::string pg_conninfo(const std::string& host, int port,
+                               const std::string& db, const std::string& user,
+                               const std::string& pass) {
+  std::string s = "host=" + host + " port=" + std::to_string(port) + " dbname=" + db + " user=" + user;
+  if (!pass.empty()) s += " password=" + pass;
+  return s;
+}
 
-        OrderService order_service(db, mq_config);
-        OutboxProcessor outbox_processor(db, mq_config);
+static void handle_signal(int) { g_stop.store(true); }
 
-        std::thread outbox_thread([&outbox_processor]() {
-            outbox_processor.run();
-        });
+int main(int argc, char** argv) {
+  std::signal(SIGINT, handle_signal);
+  std::signal(SIGTERM, handle_signal);
 
-        Server svr;
+  const std::string config_path = (argc > 1) ? argv[1] : env_str("CONFIG_PATH", "config.json");
+  const auto cfg = read_json_file(config_path);
 
-        svr.Post("/api/orders", [&order_service](const Request& req, Response& res) {
-            try {
-                auto json_body = json::parse(req.body);
-                auto user_id = json_body.at("user_id").get<std::string>();
-                auto amount = json_body.at("amount").get<double>();
-                auto description = json_body.value("description", std::string{});
+  const std::string host = env_str("HOST", cfg.value("host", std::string("0.0.0.0")));
+  const int port = env_int("PORT", cfg.value("port", 8080));
 
-                auto order = order_service.create_order(user_id, amount, description);
-                res.set_content(order.to_json().dump(), "application/json");
-                res.status = 201;
-            } catch (const std::exception& e) {
-                json error = {{"error", e.what()}};
-                res.set_content(error.dump(), "application/json");
-                res.status = 400;
-            }
-        });
+  const auto dbj = cfg.value("db", nlohmann::json::object());
+  const std::string db_host = env_str("DB_HOST", dbj.value("host", std::string("postgres-orders")));
+  const int db_port = env_int("DB_PORT", dbj.value("port", 5432));
+  const std::string db_name = env_str("DB_NAME", dbj.value("name", std::string("orders")));
+  const std::string db_user = env_str("DB_USER", dbj.value("user", std::string("postgres")));
+  const std::string db_pass = env_str("DB_PASS", dbj.value("password", std::string("postgres")));
 
-        svr.Get("/api/orders", [&order_service](const Request& req, Response& res) {
-            try {
-                auto user_id = req.get_param_value("user_id");
-                if (user_id.empty()) {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"user_id is required\"}", "application/json");
-                    return;
-                }
+  const auto mqj = cfg.value("rabbitmq", nlohmann::json::object());
+  MessageQueueConfig mq{};
+  mq.host = env_str("MQ_HOST", mqj.value("host", std::string("rabbitmq")));
+  mq.port = env_int("MQ_PORT", mqj.value("port", 5672));
+  mq.username = env_str("MQ_USER", mqj.value("username", std::string("admin")));
+  mq.password = env_str("MQ_PASS", mqj.value("password", std::string("admin")));
+  mq.vhost = env_str("MQ_VHOST", mqj.value("vhost", std::string("/")));
 
-                auto orders = order_service.get_user_orders(user_id);
-                json orders_json = json::array();
-                for (const auto& order : orders) {
-                    orders_json.push_back(order.to_json());
-                }
+  try {
+    auto db = std::make_shared<Database>(pg_conninfo(db_host, db_port, db_name, db_user, db_pass));
+    db->init_schema();
 
-                res.set_content(orders_json.dump(), "application/json");
-            } catch (const std::exception& e) {
-                json error = {{"error", e.what()}};
-                res.set_content(error.dump(), "application/json");
-                res.status = 500;
-            }
-        });
+    OrderService order_service(db, mq);
+    OutboxProcessor outbox(db, mq);
 
-        svr.Get(R"(/api/orders/([A-Za-z0-9\-]+))", [&order_service](const Request& req, Response& res) {
-            try {
-                auto order_id = req.matches[1].str();
-                auto order = order_service.get_order(order_id);
+    std::thread outbox_thread([&] { outbox.run(); });
 
-                if (order.id.empty()) {
-                    res.status = 404;
-                    res.set_content("{\"error\":\"Order not found\"}", "application/json");
-                    return;
-                }
+    httplib::Server server;
 
-                res.set_content(order.to_json().dump(), "application/json");
-            } catch (const std::exception& e) {
-                json error = {{"error", e.what()}};
-                res.set_content(error.dump(), "application/json");
-                res.status = 500;
-            }
-        });
+    server.Get("/health", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content("ok\n", "text/plain");
+      res.status = 200;
+    });
 
-        svr.Get("/health", [](const Request&, Response& res) {
-            res.set_content("OK", "text/plain");
-        });
+    server.Get("/", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content("orders-service\n", "text/plain");
+      res.status = 200;
+    });
 
-        std::cout << "Orders Service starting on port 8080..." << std::endl;
-        svr.listen("0.0.0.0", 8080);
+    std::thread http_thread([&] {
+      server.listen(host.c_str(), port);
+    });
 
-        outbox_processor.stop();
-        outbox_thread.join();
-
-    } catch (const std::exception& e) {
-        std::cerr << "Fatal error: " << e.what() << std::endl;
-        return 1;
+    while (!g_stop.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    server.stop();
+    outbox.stop();
+
+    if (http_thread.joinable()) http_thread.join();
+    if (outbox_thread.joinable()) outbox_thread.join();
     return 0;
+
+  } catch (const std::exception& e) {
+    std::cerr << "Fatal error: " << e.what() << std::endl;
+    return 1;
+  }
 }
