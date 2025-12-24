@@ -1,11 +1,9 @@
-version: "3.8"
-
 services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: password
+      RABBITMQ_DEFAULT_PASS: adminpassword
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -19,12 +17,10 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_DB: orders_db
-      POSTGRES_USER: microservice
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres-orders-data:/var/lib/postgresql/data
+      POSTGRES_USER: orders_user
+      POSTGRES_PASSWORD: orders_password
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U microservice -d orders_db"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -33,70 +29,80 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_DB: payments_db
-      POSTGRES_USER: microservice
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres-payments-data:/var/lib/postgresql/data
+      POSTGRES_USER: payments_user
+      POSTGRES_PASSWORD: payments_password
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U microservice -d payments_db"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 30
 
   orders-service:
     build:
-      context: .
-      dockerfile: orders-service/include/Dockerfile
+      context: ./orders-service
+      dockerfile: include/Dockerfile
     environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8080"
+
       DB_HOST: postgres-orders
       DB_PORT: "5432"
       DB_NAME: orders_db
-      DB_USER: microservice
-      DB_PASSWORD: password
+      DB_USER: orders_user
+      DB_PASSWORD: orders_password
+
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: "5672"
       RABBITMQ_USER: admin
-      RABBITMQ_PASS: password
+      RABBITMQ_PASSWORD: adminpassword
     depends_on:
       rabbitmq:
         condition: service_healthy
       postgres-orders:
         condition: service_healthy
+    restart: on-failure
 
   payments-service:
     build:
-      context: .
-      dockerfile: payments-service/include/Dockerfile
+      context: ./payments-service
+      dockerfile: include/Dockerfile
     environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8080"
+
       DB_HOST: postgres-payments
       DB_PORT: "5432"
       DB_NAME: payments_db
-      DB_USER: microservice
-      DB_PASSWORD: password
+      DB_USER: payments_user
+      DB_PASSWORD: payments_password
+
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: "5672"
       RABBITMQ_USER: admin
-      RABBITMQ_PASS: password
+      RABBITMQ_PASSWORD: adminpassword
     depends_on:
       rabbitmq:
         condition: service_healthy
       postgres-payments:
         condition: service_healthy
+    restart: on-failure
 
   websocket-service:
     build:
-      context: .
-      dockerfile: websocket-service/include/Dockerfile
+      context: ./websocket-service
+      dockerfile: include/Dockerfile
     environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8080"
+
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: "5672"
       RABBITMQ_USER: admin
-      RABBITMQ_PASS: password
-      WS_HOST: 0.0.0.0
-      WS_PORT: "8080"
+      RABBITMQ_PASSWORD: adminpassword
     depends_on:
       rabbitmq:
         condition: service_healthy
+    restart: on-failure
 
   frontend:
     build:
@@ -107,8 +113,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "80:80"
     depends_on:
       orders-service:
         condition: service_started
@@ -116,14 +120,5 @@ services:
         condition: service_started
       websocket-service:
         condition: service_started
-      frontend:
-        condition: service_started
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/health >/dev/null 2>&1 || exit 1"]
-      interval: 3s
-      timeout: 2s
-      retries: 60
-
-volumes:
-  postgres-orders-data:
-  postgres-payments-data:
+    ports:
+      - "80:80"

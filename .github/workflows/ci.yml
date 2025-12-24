@@ -2,111 +2,71 @@ name: CI
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
 
 jobs:
   build-and-smoke:
     runs-on: ubuntu-latest
 
-    env:
-      COMPOSE_PROJECT_NAME: apigw
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show versions
-        run: |
-          git --version
-          docker version
-          docker compose version
-          cmake --version || true
-          node -v || true
-          npm -v || true
-
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            pkg-config \
-            git \
-            ca-certificates \
-            curl \
-            libpq-dev \
-            libpqxx-dev \
-            libssl-dev \
-            librabbitmq-dev \
-            nlohmann-json3-dev \
-            libboost-system-dev \
-            libboost-thread-dev
-
-      - name: Build orders-service
-        working-directory: api-gateway/orders-service
-        run: |
-          cmake -S include -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
-
-      - name: Build payments-service
-        working-directory: api-gateway/payments-service
-        run: |
-          cmake -S include -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
-
-      - name: Build websocket-service
-        working-directory: api-gateway/websocket-service
-        run: |
-          cmake -S include -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          cache: "npm"
-          cache-dependency-path: api-gateway/src/package-lock.json
-
-      - name: Build frontend
-        working-directory: api-gateway/src
-        run: |
-          npm ci
-          npm run build
+      - name: Docker version
+        run: docker version
 
       - name: Compose up
+        working-directory: api-gateway
         run: |
-          docker compose -f api-gateway/docker-compose.yml up -d --build
-          docker compose -f api-gateway/docker-compose.yml ps
+          docker compose up -d --build
+          docker compose ps --all
 
-      - name: Wait for api-gateway healthy
+      - name: Wait for gateway
         run: |
-          CID=$(docker compose -f api-gateway/docker-compose.yml ps -q api-gateway)
-
-          for i in $(seq 1 90); do
-            STATUS=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CID" 2>/dev/null || true)
-            if [ "$STATUS" = "healthy" ]; then
-              echo "api-gateway healthy"
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost/health >/dev/null; then
+              echo "api-gateway is up"
               exit 0
             fi
-            echo "waiting for api-gateway... ($i/90) status=$STATUS"
+            echo "waiting for api-gateway... ($i/60)"
             sleep 2
           done
 
-          echo "api-gateway did not become healthy"
-          docker compose -f api-gateway/docker-compose.yml ps
-          docker compose -f api-gateway/docker-compose.yml logs --no-color --tail=300 api-gateway
+          echo "api-gateway did not become ready"
+          cd api-gateway
+          docker compose ps --all || true
+          docker compose logs --no-color || true
           exit 1
 
-      - name: Smoke test (localhost)
+      - name: Show exited containers (debug)
+        if: always()
+        working-directory: api-gateway
+        run: |
+          echo "== docker compose ps --all =="
+          docker compose ps --all || true
+
+      - name: Smoke tests
         run: |
           curl -fsS http://localhost/health
 
-      - name: Compose logs (on failure)
+          # Пробуем реальный прокси-путь (если backend поднялся)
+          curl -fsS -X POST http://localhost/api/orders \
+            -H "Content-Type: application/json" \
+            -d '{"user_id":"user123","total_amount":99.99}'
+
+          curl -fsS -X POST http://localhost/api/accounts \
+            -H "Content-Type: application/json" \
+            -d '{"id":"acc123","balance":1000.00}'
+
+      - name: Compose logs on failure
         if: failure()
+        working-directory: api-gateway
         run: |
-          docker compose -f api-gateway/docker-compose.yml ps
-          docker compose -f api-gateway/docker-compose.yml logs --no-color --tail=300
+          docker compose logs --no-color || true
+          docker compose ps --all || true
 
       - name: Compose down
         if: always()
+        working-directory: api-gateway
         run: |
-          docker compose -f api-gateway/docker-compose.yml down -v --remove-orphans
+          docker compose down -v --remove-orphans
