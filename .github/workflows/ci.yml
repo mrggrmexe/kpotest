@@ -53,7 +53,7 @@ jobs:
       - name: Build frontend
         working-directory: api-gateway/src
         run: |
-          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm ci
           npm run build
 
       - name: Compose up
