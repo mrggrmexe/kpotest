@@ -3,12 +3,12 @@ services:
     image: rabbitmq:3-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: adminpassword
+      RABBITMQ_DEFAULT_PASS: admin
     ports:
       - "5672:5672"
       - "15672:15672"
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -16,11 +16,11 @@ services:
   postgres-orders:
     image: postgres:15-alpine
     environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: orders_db
-      POSTGRES_USER: orders_user
-      POSTGRES_PASSWORD: orders_password
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d orders_db"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -28,97 +28,75 @@ services:
   postgres-payments:
     image: postgres:15-alpine
     environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: payments_db
-      POSTGRES_USER: payments_user
-      POSTGRES_PASSWORD: payments_password
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d payments_db"]
       interval: 5s
       timeout: 5s
       retries: 30
 
   orders-service:
     build:
-      context: ./orders-service
-      dockerfile: include/Dockerfile
+      context: .
+      dockerfile: orders-service/include/Dockerfile
     environment:
-      SERVICE_HOST: 0.0.0.0
-      SERVICE_PORT: "8080"
-
-      DB_HOST: postgres-orders
-      DB_PORT: "5432"
-      DB_NAME: orders_db
-      DB_USER: orders_user
-      DB_PASSWORD: orders_password
-
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: "5672"
-      RABBITMQ_USER: admin
-      RABBITMQ_PASSWORD: adminpassword
+      ORDERS_CONFIG: /app/orders-service/include/config.json
     depends_on:
       rabbitmq:
         condition: service_healthy
       postgres-orders:
         condition: service_healthy
-    restart: on-failure
+    expose:
+      - "8080"
 
   payments-service:
     build:
-      context: ./payments-service
-      dockerfile: include/Dockerfile
+      context: .
+      dockerfile: payments-service/include/Dockerfile
     environment:
-      SERVICE_HOST: 0.0.0.0
-      SERVICE_PORT: "8080"
-
-      DB_HOST: postgres-payments
-      DB_PORT: "5432"
-      DB_NAME: payments_db
-      DB_USER: payments_user
-      DB_PASSWORD: payments_password
-
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: "5672"
-      RABBITMQ_USER: admin
-      RABBITMQ_PASSWORD: adminpassword
+      PAYMENTS_CONFIG: /app/payments-service/include/config.json
     depends_on:
       rabbitmq:
         condition: service_healthy
       postgres-payments:
         condition: service_healthy
-    restart: on-failure
+    expose:
+      - "8080"
 
   websocket-service:
     build:
-      context: ./websocket-service
-      dockerfile: include/Dockerfile
+      context: .
+      dockerfile: websocket-service/include/Dockerfile
     environment:
-      SERVICE_HOST: 0.0.0.0
-      SERVICE_PORT: "8080"
-
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: "5672"
-      RABBITMQ_USER: admin
-      RABBITMQ_PASSWORD: adminpassword
+      WS_CONFIG: /app/websocket-service/include/config.json
     depends_on:
       rabbitmq:
         condition: service_healthy
-    restart: on-failure
+    expose:
+      - "9000"
 
   frontend:
     build:
       context: ./src
       dockerfile: Dockerfile
+    expose:
+      - "80"
 
   api-gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    depends_on:
-      orders-service:
-        condition: service_started
-      payments-service:
-        condition: service_started
-      websocket-service:
-        condition: service_started
     ports:
       - "80:80"
+    depends_on:
+      - orders-service
+      - payments-service
+      - websocket-service
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 60

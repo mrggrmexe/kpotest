@@ -1,25 +1,19 @@
 {
   "database": {
     "host": "postgres-payments",
-    "port": "5432",
-    "name": "payments_db",
-    "user": "microservice",
-    "password": "password"
+    "port": 5432,
+    "user": "postgres",
+    "password": "postgres",
+    "dbname": "payments_db"
   },
   "rabbitmq": {
     "host": "rabbitmq",
-    "port": "5672",
+    "port": 5672,
     "user": "admin",
-    "password": "password",
-    "exchange": "payments",
-    "queues": {
-      "payment_requests": "payment.requests",
-      "payment_results": "payment.results"
-    }
+    "password": "admin"
   },
   "server": {
     "host": "0.0.0.0",
-    "port": 8080,
-    "threads": 4
+    "port": 8080
   }
 }
