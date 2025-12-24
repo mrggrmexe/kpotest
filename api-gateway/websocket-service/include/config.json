@@ -1,12 +1,14 @@
 {
-  "rabbitmq": {
-    "host": "rabbitmq",
-    "port": 5672,
-    "user": "admin",
-    "password": "admin"
-  },
   "server": {
     "host": "0.0.0.0",
-    "port": 9000
+    "port": "8080"
+  },
+  "rabbitmq": {
+    "host": "rabbitmq",
+    "port": "5672",
+    "user": "admin",
+    "password": "adminpassword",
+    "exchange": "payments_exchange",
+    "payment_results_queue": "payment_results_queue"
   }
 }

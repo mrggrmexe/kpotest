@@ -1,19 +1,22 @@
 {
   "database": {
     "host": "postgres-orders",
-    "port": 5432,
-    "user": "postgres",
-    "password": "postgres",
-    "dbname": "orders_db"
+    "port": "5432",
+    "name": "orders_db",
+    "user": "orders_user",
+    "password": "orders_pass"
   },
   "rabbitmq": {
     "host": "rabbitmq",
-    "port": 5672,
+    "port": "5672",
     "user": "admin",
-    "password": "admin"
+    "password": "adminpassword",
+    "exchange": "payments_exchange",
+    "payment_requests_queue": "payment_requests_queue",
+    "payment_results_queue": "payment_results_queue"
   },
   "server": {
     "host": "0.0.0.0",
-    "port": 8080
+    "port": "8080"
   }
 }
